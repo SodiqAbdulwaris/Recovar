@@ -1,0 +1,22 @@
+[package]
+name = "recovar-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line interface for Recovar file recovery"
+
+[[bin]]
+name = "recovar"
+path = "src/main.rs"
+
+[dependencies]
+recovarcorelib = { path = "../recovar-core", package = "recovar-core" }
+clap = { version = "4", features = ["derive", "color", "suggestions"] }
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+indicatif = "0.17"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+colored = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Security"] }

@@ -108,6 +108,13 @@ async fn run_scan(args: ScanArgs) -> Result<()> {
             image_path: args.image.as_ref().and_then(|p| p.to_str().map(|s| s.to_string())),
         },
     };
+
+    // FIXED: Extract the drive string here, BEFORE we create and borrow `session`
+    let drive_str = match &target {
+        Target::Laptop { drive } => drive.clone(),
+        Target::Android { .. } => String::new(),
+    };
+
     println!(
         "{}  Starting {} scan on {}",
         "→".cyan().bold(),
@@ -124,6 +131,7 @@ async fn run_scan(args: ScanArgs) -> Result<()> {
         eprintln!("{} Run as Administrator for full disk access.", "⚠ WARNING:".yellow().bold());
         eprintln!();
     }
+    
     let pb = ProgressBar::new(100);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -132,37 +140,49 @@ async fn run_scan(args: ScanArgs) -> Result<()> {
             .progress_chars("█▉▊▋▌▍▎▏ ")
     );
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    
     let mut session = RecoverySession::new(target, mode);
     let start = Instant::now();
     let pb_clone = pb.clone();
+    
     let results = session.run(&mut move |progress: ScanProgress| {
         pb_clone.set_position(progress.percent() as u64);
         pb_clone.set_message(format!("{} | {} found", progress.phase, progress.files_found));
     })?;
+    
     pb.finish_and_clear();
     let elapsed = start.elapsed();
+    
     println!(
         "{}  Scan complete in {:.1}s — {} file(s) found",
         "✓".green().bold(), elapsed.as_secs_f32(),
         results.len().to_string().green().bold()
     );
     println!();
+    
     if results.is_empty() {
         println!("  {} No recoverable files found.", "●".dimmed());
         println!("  Tip: Try {} mode for deeper scanning.", "--mode deep".yellow());
         return Ok(());
     }
+    
     let filter_types = parse_filter(args.filter.as_deref());
-    let filtered: Vec<&RecoveredFile> = results.iter()
+    
+    // FIXED: Added `.cloned()` to take ownership of the structs. 
+    // This drops the mutable borrow on `session` immediately.
+    let filtered: Vec<RecoveredFile> = results.iter()
         .filter(|f| {
             if filter_types.is_empty() { f.file_type.is_image() || f.file_type.is_video() }
             else { filter_types.contains(&f.file_type) }
         })
         .take(if args.limit == 0 { usize::MAX } else { args.limit })
+        .cloned() 
         .collect();
+        
     println!("  {:<6} {:<30} {:>10} {:<18} {:<14} {}",
         "#".bold(), "Name".bold(), "Size".bold(), "Type".bold(), "Method".bold(), "Confidence".bold());
     println!("  {}", "─".repeat(88).dimmed());
+    
     for file in &filtered {
         let name = file.name.as_deref().unwrap_or("(unnamed)").chars().take(29).collect::<String>();
         let size = format_size(file.size);
@@ -176,20 +196,20 @@ async fn run_scan(args: ScanArgs) -> Result<()> {
         let conf_col = if file.confidence >= 0.9 { conf.green().to_string() }
             else if file.confidence >= 0.7 { conf.yellow().to_string() }
             else { conf.red().to_string() };
+            
         println!("  {:<6} {:<30} {:>10} {:<18} {:<14} {}",
             format!("#{}", file.index).dimmed(), name,
             size.cyan().to_string(), file.file_type.display_name(), method, conf_col);
     }
     println!();
+    
     if args.save {
         println!("{} Saving {} file(s)...", "→".cyan(), filtered.len());
-        let drive = match &session.target {
-            Target::Laptop { drive } => drive.clone(),
-            Target::Android { .. } => String::new(),
-        };
         let mut saved = 0;
+        
         for file in &filtered {
-            match session.save_file(file, &args.output, &drive) {
+            // FIXED: Using `drive_str` instead of looking back into `session.target`
+            match session.save_file(file, &args.output, &drive_str) {
                 Ok(path) => { println!("  {} {}", "✓".green(), path.display()); saved += 1; }
                 Err(e) => println!("  {} Failed: {}", "✗".red(), e),
             }
@@ -280,6 +300,6 @@ fn format_size(bytes: u64) -> String {
 
 #[cfg(windows)]
 fn is_admin() -> bool {
-    use windows_sys::Win32::Security::IsUserAnAdmin;
+    use windows_sys::Win32::UI::Shell::IsUserAnAdmin;
     unsafe { IsUserAnAdmin() != 0 }
 }

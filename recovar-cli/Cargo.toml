@@ -19,4 +19,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 colored = "2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_Security"] }
+windows-sys = { version = "0.52", features = ["Win32_Security", "Win32_UI_Shell"] }

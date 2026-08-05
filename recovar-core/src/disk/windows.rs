@@ -8,8 +8,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_NO_BUFFERING, FILE_FLAG_SEQUENTIAL_SCAN,
     FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
-    DRIVE_CDROM,
+    // DRIVE_CDROM,
 };
+use windows_sys::Win32::System::WindowsProgramming::DRIVE_CDROM;
 use windows_sys::Win32::System::IO::{DeviceIoControl, OVERLAPPED};
 use windows_sys::Win32::System::Ioctl::{DISK_GEOMETRY_EX, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX};
 use windows_sys::Win32::Storage::FileSystem::ReadFile;
@@ -55,7 +56,8 @@ pub fn open_drive(path: &str) -> Result<Box<dyn DiskReader>> {
             std::mem::size_of::<DISK_GEOMETRY_EX>() as u32, &mut ret, std::ptr::null_mut())
     };
     let (size, sector_size) = if ok != 0 {
-        (unsafe { geom.DiskSize.QuadPart } as u64, geom.Geometry.BytesPerSector)
+        // (unsafe { geom.DiskSize.QuadPart } as u64, geom.Geometry.BytesPerSector)
+        (geom.DiskSize as u64, geom.Geometry.BytesPerSector)
     } else { (0u64, 512u32) };
     Ok(Box::new(WindowsDisk { handle, size, sector_size }))
 }

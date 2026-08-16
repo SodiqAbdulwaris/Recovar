@@ -18,7 +18,7 @@ use std::time::Instant;
 #[command(
     name = "recovar",
     version = env!("CARGO_PKG_VERSION"),
-    about = "Recover deleted files from Windows drives and Android devices",
+    about = "Recover deleted files from local drives and Android devices",
 )]
 struct Cli {
     #[arg(short, long, global = true)]

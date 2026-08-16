@@ -479,8 +479,6 @@ export default function App() {
           </div>
         </div>
       </div>
-
-      {scanState === "scanning" && <div className="scan-wave" />}
     </div>
   );
 }

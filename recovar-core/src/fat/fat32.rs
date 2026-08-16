@@ -80,7 +80,7 @@ fn scan_dir(
         if entry[0] == DELETED_MARKER {
             let attrs = entry[11];
             if attrs != 0x0F && (attrs & 0x10) == 0 && (attrs & 0x08) == 0 {
-                if let Some(r) = parse_entry(entry, results.len()) {
+                if let Some(r) = parse_entry(entry, bpb, results.len()) {
                     results.push(r);
                     progress_cb(ScanProgress {
                         bytes_scanned: off, bytes_total: reader.size(), files_found: results.len(),
@@ -95,12 +95,18 @@ fn scan_dir(
     Ok(())
 }
 
-fn parse_entry(entry: &[u8], index: usize) -> Option<RecoveredFile> {
+fn parse_entry(entry: &[u8], bpb: &Fat32Bpb, index: usize) -> Option<RecoveredFile> {
     let raw_name = std::str::from_utf8(&entry[1..8]).unwrap_or("").trim().to_string();
     let raw_ext = std::str::from_utf8(&entry[8..11]).unwrap_or("").trim().to_lowercase();
     if raw_name.is_empty() { return None; }
     let filename = if raw_ext.is_empty() { format!("?{raw_name}") } else { format!("?{raw_name}.{raw_ext}") };
     let size = u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]) as u64;
+    // The deleted-entry marker only clobbers the first name byte; the cluster
+    // fields (start of file data) survive, so the content can still be pulled.
+    let cluster_hi = u16::from_le_bytes([entry[20], entry[21]]) as u32;
+    let cluster_lo = u16::from_le_bytes([entry[26], entry[27]]) as u32;
+    let first_cluster = (cluster_hi << 16) | cluster_lo;
+    let disk_offset = if first_cluster >= 2 { cluster_offset(bpb, first_cluster) } else { 0 };
     let file_type = match raw_ext.as_str() {
         "jpg" | "jpeg" => FileType::Jpeg, "png" => FileType::Png, "gif" => FileType::Gif,
         "bmp" => FileType::Bmp, "mp4" => FileType::Mp4, "mov" => FileType::Mov,
@@ -109,7 +115,7 @@ fn parse_entry(entry: &[u8], index: usize) -> Option<RecoveredFile> {
         _ => FileType::Unknown,
     };
     Some(RecoveredFile {
-        name: Some(filename), original_path: None, size, file_type, disk_offset: 0,
+        name: Some(filename), original_path: None, size, file_type, disk_offset,
         recovery_method: RecoveryMethod::Fat32Directory, confidence: 0.80, index,
     })
 }

@@ -5,10 +5,18 @@ use recovarcorelib::{
     RecoverySession,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::path::Path;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State, Emitter};
 
-pub struct ActiveSession(pub Mutex<Option<RecoverySession>>);
+#[derive(Default)]
+pub struct ActiveSession {
+    // Set before the (blocking) scan runs so stop_scan can reach a scan in progress.
+    pub stop_flag: Mutex<Option<Arc<AtomicBool>>>,
+    // Set once the scan completes, so recover_files can save from its results.
+    pub session: Mutex<Option<RecoverySession>>,
+}
 
 #[tauri::command]
 pub async fn list_drives() -> Result<Vec<DriveInfoDto>, String> {
@@ -27,9 +35,10 @@ pub async fn list_android_devices() -> Result<Vec<AdbDeviceDto>, String> {
 #[tauri::command]
 pub async fn start_scan(
     app: AppHandle,
+    state: State<'_, ActiveSession>,
     target: serde_json::Value,
     mode: String,
-    output_dir: String,
+    #[allow(unused_variables)] output_dir: String,
 ) -> Result<Vec<RecoveredFile>, String> {
     let target_obj = target.as_object().ok_or("Invalid target")?;
     let target_core = if let Some(laptop) = target_obj.get("Laptop") {
@@ -51,34 +60,56 @@ pub async fn start_scan(
 
     let app_clone = app.clone();
     let mut session = RecoverySession::new(target_core, scan_mode);
+    *state.stop_flag.lock().unwrap() = Some(session.stop_flag.clone());
 
     let results = session.run(&mut move |progress: ScanProgress| {
         let _ = app_clone.emit("scan-progress", &progress);
     });
 
+    *state.stop_flag.lock().unwrap() = None;
+
     match results {
         Ok(files) => {
-            for file in files.iter() {
+            let files = files.clone();
+            for file in &files {
                 let _ = app.emit("file-found", file);
             }
-            Ok(files.clone())
+            *state.session.lock().unwrap() = Some(session);
+            Ok(files)
         }
         Err(e) => Err(e.to_string()),
     }
 }
 
 #[tauri::command]
-pub async fn stop_scan() -> Result<(), String> {
+pub async fn stop_scan(state: State<'_, ActiveSession>) -> Result<(), String> {
+    if let Some(flag) = state.stop_flag.lock().unwrap().as_ref() {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     Ok(())
 }
 
 #[tauri::command]
 pub async fn recover_files(
+    state: State<'_, ActiveSession>,
     indices: Vec<usize>,
     output_dir: String,
 ) -> Result<usize, String> {
-    tracing::info!("Recover {} files to {}", indices.len(), output_dir);
-    Ok(indices.len())
+    let guard = state.session.lock().unwrap();
+    let session = guard.as_ref().ok_or("No completed scan to recover from")?;
+    let drive = match &session.target {
+        Target::Laptop { drive } => drive.clone(),
+        Target::Android { .. } => String::new(),
+    };
+    let out_dir = Path::new(&output_dir);
+    let mut saved = 0;
+    for file in session.results.iter().filter(|f| indices.contains(&f.index)) {
+        match session.save_file(file, out_dir, &drive) {
+            Ok(_) => saved += 1,
+            Err(e) => tracing::warn!("Failed to save file #{}: {}", file.index, e),
+        }
+    }
+    Ok(saved)
 }
 
 // ---- DTOs ----

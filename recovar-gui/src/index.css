@@ -422,20 +422,6 @@ html, body {
   position: relative;
 }
 
-/* Animated shimmer on progress bar */
-.progress-fill.active::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-  animation: shimmer 1.5s infinite;
-}
-
-@keyframes shimmer {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(200%); }
-}
-
 /* ---- Toolbar ---- */
 .toolbar {
   display: flex;
@@ -623,12 +609,6 @@ html, body {
 .empty-state-icon {
   font-size: 56px;
   opacity: 0.4;
-  animation: float 3s ease-in-out infinite;
-}
-
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-8px); }
 }
 
 .empty-state-title {
@@ -709,17 +689,3 @@ html, body {
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Scanning wave animation */
-@keyframes scanWave {
-  0%   { transform: translateX(-100%); }
-  100% { transform: translateX(100vw); }
-}
-
-.scan-wave {
-  position: absolute;
-  top: 0; left: 0;
-  width: 120px; height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(94,155,255,0.04), transparent);
-  pointer-events: none;
-  animation: scanWave 2.5s linear infinite;
-}

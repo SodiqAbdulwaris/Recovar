@@ -96,7 +96,7 @@ pub fn list_drives() -> Result<Vec<DriveInfo>> {
     for i in 0..26u32 {
         if mask & (1 << i) == 0 { continue; }
         let letter = (b'A' + i as u8) as char;
-        let path = format!("{letter}:\\\\");
+        let path = format!("{letter}:\\");
         let wide_path = to_wide(&path);
         let drive_type = unsafe { GetDriveTypeW(wide_path.as_ptr()) };
         if drive_type == DRIVE_CDROM { continue; }
@@ -121,7 +121,7 @@ pub fn list_drives() -> Result<Vec<DriveInfo>> {
             String::from_utf16_lossy(&fs_buf[..end]).to_string()
         } else { "Unknown".to_string() };
         drives.push(DriveInfo {
-            path: format!("{letter}:\\\\"),
+            path: format!("{letter}:\\"),
             label: format!("{label} ({letter}:)"),
             size: 0,
             filesystem,

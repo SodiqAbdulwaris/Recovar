@@ -6,6 +6,8 @@ dist/
 recovar-gui/src-tauri/gen/schemas/
 
 extras/
+.claude/
+docs/
 
 *.exe
 *.pdb

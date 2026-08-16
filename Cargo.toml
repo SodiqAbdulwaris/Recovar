@@ -1,5 +1,4 @@
 [workspace]
-name = "recovar"
 members = [
     "recovar-core",
     "recovar-cli",

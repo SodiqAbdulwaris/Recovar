@@ -109,3 +109,56 @@ fn find_footer(reader: &mut dyn DiskReader, start: u64, footer: &[u8], max_size:
     }
     (0, 0.4)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::disk::DiskReader;
+
+    struct MemDisk(Vec<u8>);
+
+    impl DiskReader for MemDisk {
+        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> anyhow::Result<usize> {
+            let offset = offset as usize;
+            if offset >= self.0.len() { return Ok(0); }
+            let n = buf.len().min(self.0.len() - offset);
+            buf[..n].copy_from_slice(&self.0[offset..offset + n]);
+            Ok(n)
+        }
+        fn size(&self) -> u64 { self.0.len() as u64 }
+        fn sector_size(&self) -> u32 { 512 }
+    }
+
+    #[test]
+    fn carves_deleted_jpeg_out_of_raw_bytes() {
+        // No filesystem at all here: some noise, then a JPEG (header ... footer)
+        // embedded at a known offset, as if its directory entry were long gone
+        // and only the raw signature survives, which is what deep scan targets.
+        let mut disk_bytes = vec![0xCCu8; 4096];
+        let jpeg_offset = 1000usize;
+        let jpeg_body: Vec<u8> = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]
+            .iter().copied()
+            .chain((0..200).map(|i| (i % 251) as u8)) // filler "image data"
+            .chain([0xFF, 0xD9]) // JPEG footer
+            .collect();
+        disk_bytes[jpeg_offset..jpeg_offset + jpeg_body.len()].copy_from_slice(&jpeg_body);
+
+        let mut disk = MemDisk(disk_bytes);
+        let stop = Arc::new(AtomicBool::new(false));
+        let results = carve(&mut disk, 0, &mut |_| {}, stop).expect("carve should succeed");
+
+        assert_eq!(results.len(), 1, "expected exactly one carved file");
+        let file = &results[0];
+        assert_eq!(file.file_type, crate::types::FileType::Jpeg);
+        assert_eq!(file.disk_offset, jpeg_offset as u64);
+        assert_eq!(
+            file.size as usize,
+            jpeg_body.len(),
+            "carved size must span header through footer, not just the header"
+        );
+
+        let mut recovered = vec![0u8; file.size as usize];
+        disk.read_at(file.disk_offset, &mut recovered).unwrap();
+        assert_eq!(recovered, jpeg_body, "carved bytes must match the original file");
+    }
+}

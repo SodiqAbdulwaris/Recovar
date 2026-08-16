@@ -30,6 +30,7 @@ test data on a real disk to carve back out was judged out of scope for an automa
 The `save_file` / offset-computation logic was verified by code review and by confirming it
 reuses the same tested `cluster_offset` helper already exercised by the directory walker.
 
-No automated test suite exists in this repository (`cargo test` finds no test targets); none
-was added, since the recovery logic is disk-I/O-bound and hard to unit test meaningfully
-without a synthetic disk image, which was judged out of scope for this pass.
+A small existing unit test suite in `recovar-core/src/carver/signatures.rs` (3 tests) could
+not previously run at all: `cargo test -p recovar-core` failed to compile in isolation. See
+`docs/fixes/fix-recovar-core-standalone-build.md`. A synthetic, disk-free recovery test suite
+was added afterward; see `docs/testing/add-synthetic-recovery-tests.md`.

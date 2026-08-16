@@ -15,6 +15,7 @@ tracing = "0.1"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_System_WindowsProgramming",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",

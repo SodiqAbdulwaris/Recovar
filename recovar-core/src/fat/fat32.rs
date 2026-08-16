@@ -119,3 +119,87 @@ fn parse_entry(entry: &[u8], bpb: &Fat32Bpb, index: usize) -> Option<RecoveredFi
         recovery_method: RecoveryMethod::Fat32Directory, confidence: 0.80, index,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// An in-memory disk backed by a byte buffer, so scanning logic can be
+    /// exercised without touching a real Windows device or needing Administrator.
+    struct MemDisk(Vec<u8>);
+
+    impl DiskReader for MemDisk {
+        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> anyhow::Result<usize> {
+            let offset = offset as usize;
+            if offset >= self.0.len() { return Ok(0); }
+            let n = buf.len().min(self.0.len() - offset);
+            buf[..n].copy_from_slice(&self.0[offset..offset + n]);
+            Ok(n)
+        }
+        fn size(&self) -> u64 { self.0.len() as u64 }
+        fn sector_size(&self) -> u32 { 512 }
+    }
+
+    /// Builds a minimal FAT32 image (boot sector + one deleted file in the
+    /// root directory) and returns it along with the original file bytes.
+    fn build_fat32_image() -> (Vec<u8>, Vec<u8>) {
+        let mut img = vec![0u8; 2048];
+
+        // Boot sector / BPB: 512 bytes/sector, 1 sector/cluster, 1 reserved
+        // sector, 1 FAT of 1 sector, root directory starts at cluster 2.
+        img[0x0B..0x0D].copy_from_slice(&512u16.to_le_bytes());
+        img[0x0D] = 1;
+        img[0x0E..0x10].copy_from_slice(&1u16.to_le_bytes());
+        img[0x10] = 1;
+        img[0x24..0x28].copy_from_slice(&1u32.to_le_bytes());
+        img[0x2C..0x30].copy_from_slice(&2u32.to_le_bytes());
+        img[82..90].copy_from_slice(b"FAT32   ");
+        img[510] = 0x55;
+        img[511] = 0xAA;
+
+        // Root directory cluster (offset 1024): one deleted 8.3 entry
+        // "TESTFIL.JPG", 300 bytes, starting at cluster 3.
+        let e = 1024;
+        img[e] = DELETED_MARKER;
+        img[e + 1..e + 8].copy_from_slice(b"TESTFIL");
+        img[e + 8..e + 11].copy_from_slice(b"JPG");
+        img[e + 11] = 0x20; // ATTR_ARCHIVE
+        img[e + 20..e + 22].copy_from_slice(&0u16.to_le_bytes()); // cluster high
+        img[e + 26..e + 28].copy_from_slice(&3u16.to_le_bytes()); // cluster low
+        img[e + 28..e + 32].copy_from_slice(&300u32.to_le_bytes()); // size
+
+        // File data cluster (offset 1536 = data_start + (3-2)*512).
+        let payload: Vec<u8> = (0..300u32).map(|i| b'A' + (i % 26) as u8).collect();
+        img[1536..1536 + 300].copy_from_slice(&payload);
+
+        (img, payload)
+    }
+
+    #[test]
+    fn recovers_deleted_fat32_file_with_correct_bytes() {
+        let (img, expected_payload) = build_fat32_image();
+        let mut disk = MemDisk(img);
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let results = scan_fat32(&mut disk, &mut |_| {}, stop).expect("scan should succeed");
+
+        assert_eq!(results.len(), 1, "expected exactly one deleted file to be found");
+        let file = &results[0];
+        assert_eq!(file.name.as_deref(), Some("?TESTFIL.jpg"));
+        assert_eq!(file.size, 300);
+        assert_eq!(
+            file.disk_offset, 1536,
+            "disk_offset must point at the file's actual data cluster, not 0"
+        );
+
+        // Mirrors what RecoverySession::save_file does: read `size` bytes at `disk_offset`.
+        let mut recovered = vec![0u8; file.size as usize];
+        let n = disk.read_at(file.disk_offset, &mut recovered).unwrap();
+        assert_eq!(n, 300);
+        assert_eq!(
+            recovered, expected_payload,
+            "recovered bytes must match the original file content"
+        );
+    }
+}

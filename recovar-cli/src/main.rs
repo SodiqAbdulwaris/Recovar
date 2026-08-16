@@ -145,7 +145,7 @@ async fn run_scan(args: ScanArgs) -> Result<()> {
     let start = Instant::now();
     let pb_clone = pb.clone();
     
-    let results = session.run(&mut move |progress: ScanProgress| {
+    let results = session.run(&args.output, &mut move |progress: ScanProgress| {
         pb_clone.set_position(progress.percent() as u64);
         pb_clone.set_message(format!("{} | {} found", progress.phase, progress.files_found));
     })?;

@@ -52,7 +52,7 @@ successfully (see `docs/testing/verify-cli-scan-and-list.md`).
 
 ## Notes
 
-`start_scan` still runs the blocking scan directly inside an `async fn` rather than via
-`tauri::async_runtime::spawn_blocking`. On the default multi-threaded Tokio runtime this does
-not prevent `stop_scan` from being scheduled on another worker thread, but moving the scan to
-`spawn_blocking` would be a more robust design if this becomes a problem in practice.
+`start_scan` originally ran the blocking scan directly inside an `async fn`. This was later
+moved to `tauri::async_runtime::spawn_blocking` after an independent Antigravity review
+flagged that it could starve `stop_scan` of a chance to run; see
+`docs/fixes/fix-android-output-dir-and-blocking-scan.md`.

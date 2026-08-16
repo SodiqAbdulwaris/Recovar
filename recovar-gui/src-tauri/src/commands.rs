@@ -5,7 +5,7 @@ use recovarcorelib::{
     RecoverySession,
 };
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State, Emitter};
@@ -38,7 +38,7 @@ pub async fn start_scan(
     state: State<'_, ActiveSession>,
     target: serde_json::Value,
     mode: String,
-    #[allow(unused_variables)] output_dir: String,
+    output_dir: String,
 ) -> Result<Vec<RecoveredFile>, String> {
     let target_obj = target.as_object().ok_or("Invalid target")?;
     let target_core = if let Some(laptop) = target_obj.get("Laptop") {
@@ -61,16 +61,27 @@ pub async fn start_scan(
     let app_clone = app.clone();
     let mut session = RecoverySession::new(target_core, scan_mode);
     *state.stop_flag.lock().unwrap() = Some(session.stop_flag.clone());
+    let output_path = PathBuf::from(output_dir);
 
-    let results = session.run(&mut move |progress: ScanProgress| {
-        let _ = app_clone.emit("scan-progress", &progress);
-    });
+    // Scanning (raw disk reads / signature carving) is a long, blocking
+    // operation; running it off the async executor keeps other command
+    // invocations (in particular stop_scan) responsive while it's in flight.
+    let task = tauri::async_runtime::spawn_blocking(move || {
+        let run_result = session
+            .run(&output_path, &mut move |progress: ScanProgress| {
+                let _ = app_clone.emit("scan-progress", &progress);
+            })
+            .map(|files| files.clone());
+        (session, run_result)
+    })
+    .await
+    .map_err(|e| format!("scan task failed: {e}"))?;
 
     *state.stop_flag.lock().unwrap() = None;
 
-    match results {
+    let (session, run_result) = task;
+    match run_result {
         Ok(files) => {
-            let files = files.clone();
             for file in &files {
                 let _ = app.emit("file-found", file);
             }

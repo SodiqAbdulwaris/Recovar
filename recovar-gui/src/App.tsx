@@ -142,8 +142,8 @@ export default function App() {
     if (selected.size === 0) return;
     try {
       const indices = Array.from(selected);
-      await invoke("recover_files", { indices, outputDir });
-      setStatusMsg(`Saved ${selected.size} file(s) to ${outputDir}`);
+      const savedCount = await invoke<number>("recover_files", { indices, outputDir });
+      setStatusMsg(`Saved ${savedCount} of ${selected.size} file(s) to ${outputDir}`);
     } catch (e) {
       setError(`Recovery failed: ${e}`);
     }
@@ -238,7 +238,7 @@ export default function App() {
                   className="select"
                   value={selectedDrive}
                   onChange={e => setSelectedDrive(e.target.value)}
-                  onClick={loadDrives}
+                  onClick={() => { if (drives.length === 0) loadDrives(); }}
                 >
                   {drives.length === 0 && (
                     <option value="">Click to load drives...</option>
@@ -264,7 +264,7 @@ export default function App() {
                   className="select"
                   value={selectedDevice}
                   onChange={e => setSelectedDevice(e.target.value)}
-                  onClick={loadDevices}
+                  onClick={() => { if (devices.length === 0) loadDevices(); }}
                 >
                   {devices.length === 0 && (
                     <option value="">Click to scan for devices...</option>

@@ -40,6 +40,8 @@ type Target = "laptop" | "android";
 type ScanMode = "quick" | "deep" | "both";
 type ScanState = "idle" | "scanning" | "complete" | "error";
 
+const HIGH_CONFIDENCE = 0.85;
+
 export default function App() {
   const [target, setTarget] = useState<Target>("laptop");
   const [scanMode, setScanMode] = useState<ScanMode>("both");
@@ -55,6 +57,7 @@ export default function App() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [statusMsg, setStatusMsg] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
+  const [railOpen, setRailOpen] = useState(false);
 
   const unlistenRef = useRef<(() => void) | null>(null);
 
@@ -103,6 +106,7 @@ export default function App() {
     setSelected(new Set());
     setScanState("scanning");
     setError(null);
+    setRailOpen(false);
     setProgress({ bytes_scanned: 0, bytes_total: 1, files_found: 0, phase: "Initializing...", complete: false, warning: null });
 
     const unlisten = await listen<ScanProgress>("scan-progress", (event) => {
@@ -158,12 +162,10 @@ export default function App() {
     });
   };
 
-  const selectAll = () => {
-    if (selected.size === results.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(results.map(r => r.index)));
-    }
+  const selectHighConfidence = () => {
+    const highConfidence = results.filter(r => r.confidence >= HIGH_CONFIDENCE).map(r => r.index);
+    const allHighSelected = highConfidence.length > 0 && highConfidence.every(i => selected.has(i));
+    setSelected(allHighSelected ? new Set() : new Set(highConfidence));
   };
 
   const pct = progress ? Math.round((progress.bytes_scanned / Math.max(progress.bytes_total, 1)) * 100) : 0;
@@ -183,118 +185,164 @@ export default function App() {
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   };
 
-  const getConfClass = (c: number) => c >= 0.85 ? "high" : c >= 0.65 ? "med" : "low";
+  const getConfClass = (c: number) => c >= HIGH_CONFIDENCE ? "high" : c >= 0.65 ? "mid" : "low";
 
   const getMethodLabel = (m: string) => {
     const map: Record<string, string> = {
-      NtfsMft: "NTFS MFT",
-      Fat32Directory: "FAT32 Dir",
-      DiskCarving: "Carving",
-      AdbPull: "ADB Pull",
+      NtfsMft: "MFT record",
+      Fat32Directory: "FAT32 entry",
+      DiskCarving: "Sector carve",
+      AdbPull: "ADB pull",
     };
     return map[m] ?? m;
+  };
+
+  const targetLabel = target === "laptop"
+    ? (selectedDrive || "the selected drive")
+    : (selectedDevice ? `device ${selectedDevice}` : "your phone");
+
+  const highConfidenceResults = results.filter(r => r.confidence >= HIGH_CONFIDENCE);
+  const reviewResults = results.filter(r => r.confidence < HIGH_CONFIDENCE);
+  const selectedSize = results.filter(r => selected.has(r.index)).reduce((sum, r) => sum + r.size, 0);
+  const allHighSelected = highConfidenceResults.length > 0 && highConfidenceResults.every(r => selected.has(r.index));
+
+  const renderRow = (file: RecoveredFile) => {
+    const isSelected = selected.has(file.index);
+    const conf = getConfClass(file.confidence);
+    const typeClass = getTypeBadgeClass(file.file_type);
+    const displayName = file.name ?? `recovered_${String(file.index).padStart(4, "0")}.${file.file_type}`;
+    const subtext = file.original_path
+      ?? (file.disk_offset > 0 ? `signature match, offset 0x${file.disk_offset.toString(16).toUpperCase()}` : null);
+
+    return (
+      <div
+        key={file.index}
+        className={`result-row ${isSelected ? "selected" : ""}`}
+        onClick={() => toggleSelect(file.index)}
+        role="row"
+      >
+        <div className="chk">{isSelected && <span className="chk-check">✓</span>}</div>
+        <div className="r-name">
+          <div className="fname">{displayName}</div>
+          {subtext && <div className="fpath">{subtext}</div>}
+        </div>
+        <div className="r-meta">
+          <div className="r-size">{formatSize(file.size)}</div>
+          <span className={`type-chip ${typeClass}`}>
+            <span className={`sw ${typeClass}`} />
+            {file.file_type.toUpperCase()}
+          </span>
+          <div className="r-method">{getMethodLabel(file.recovery_method)}</div>
+          <div className="conf">
+            <div className="conf-track"><div className={`conf-fill ${conf}`} style={{ width: `${Math.round(file.confidence * 100)}%` }} /></div>
+            <span className={`conf-num ${conf}`}>{Math.round(file.confidence * 100)}%</span>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
     <div className="app">
       <div className="titlebar">
         <div className="titlebar-logo">
-          <div className="titlebar-logo-icon">R</div>
-          <span className="titlebar-title">Recovar</span>
-          <span className="titlebar-version">v0.1.0</span>
+          <span className="wordmark">Recov<em>ar</em></span>
+          <span className="titlebar-sub">SALVAGE CONSOLE</span>
         </div>
+        <button className="rail-toggle" onClick={() => setRailOpen(o => !o)} aria-expanded={railOpen}>
+          <span className="label">{railOpen ? "Hide" : "Scan"} setup</span>
+          <span>{railOpen ? "▴" : "▾"}</span>
+        </button>
+        <span className="device-tag">
+          <span className={`dot ${scanState === "scanning" ? "" : "idle"}`} />
+          {target === "laptop"
+            ? (selectedDrive || "No drive selected")
+            : (selectedDevice || "No device selected")}
+        </span>
       </div>
 
-      <div className="main-layout">
-        <aside className="sidebar">
+      <div className="safety-banner">
+        <span className="glyph">!</span>
+        <span className="msg">
+          <strong>Reading only.</strong> Stop saving or installing anything to {targetLabel} — every new write can permanently erase a file still waiting to be recovered.
+        </span>
+      </div>
+
+      <div className="body">
+        <aside className={`rail ${railOpen ? "open" : ""}`}>
           <div>
-            <div className="sidebar-section-label">Recovery Target</div>
-            <div className="target-grid">
+            <div className="rail-label">Recovery Target</div>
+            <div className="seg">
               <button
-                className={`target-btn ${target === "laptop" ? "active" : ""}`}
+                className={target === "laptop" ? "active" : ""}
                 onClick={() => handleTargetChange("laptop")}
               >
-                <span className="target-btn-icon">💻</span>
-                <span className="target-btn-label">Laptop</span>
+                This PC
               </button>
               <button
-                className={`target-btn ${target === "android" ? "active" : ""}`}
+                className={target === "android" ? "active" : ""}
                 onClick={() => handleTargetChange("android")}
               >
-                <span className="target-btn-icon">📱</span>
-                <span className="target-btn-label">Android</span>
+                Android
               </button>
             </div>
           </div>
 
-          <div>
-            <div className="sidebar-section-label">
-              {target === "laptop" ? "Drive" : "Device"}
+          {target === "laptop" ? (
+            <div className="field">
+              <div className="rail-label">Drive</div>
+              <select
+                className="select"
+                value={selectedDrive}
+                onChange={e => setSelectedDrive(e.target.value)}
+                onClick={() => { if (drives.length === 0) loadDrives(); }}
+              >
+                {drives.length === 0 && <option value="">Click to load drives…</option>}
+                {drives.map(d => (
+                  <option key={d.path} value={d.path}>{d.label} [{d.filesystem}]</option>
+                ))}
+              </select>
+              <span className="field-cap">Or type a drive path</span>
+              <input
+                className="input"
+                placeholder="e.g. D:\\"
+                value={selectedDrive}
+                onChange={e => setSelectedDrive(e.target.value)}
+              />
             </div>
-            {target === "laptop" ? (
-              <div className="field">
-                <label className="field-label">Select drive to scan</label>
-                <select
-                  className="select"
-                  value={selectedDrive}
-                  onChange={e => setSelectedDrive(e.target.value)}
-                  onClick={() => { if (drives.length === 0) loadDrives(); }}
-                >
-                  {drives.length === 0 && (
-                    <option value="">Click to load drives...</option>
-                  )}
-                  {drives.map(d => (
-                    <option key={d.path} value={d.path}>
-                      {d.label} [{d.filesystem}]
-                    </option>
-                  ))}
-                </select>
-                <label className="field-label" style={{marginTop: 8}}>Or type drive path</label>
-                <input
-                  className="input"
-                  placeholder="e.g. D:\\"
-                  value={selectedDrive}
-                  onChange={e => setSelectedDrive(e.target.value)}
-                />
-              </div>
-            ) : (
-              <div className="field">
-                <label className="field-label">Android device</label>
-                <select
-                  className="select"
-                  value={selectedDevice}
-                  onChange={e => setSelectedDevice(e.target.value)}
-                  onClick={() => { if (devices.length === 0) loadDevices(); }}
-                >
-                  {devices.length === 0 && (
-                    <option value="">Click to scan for devices...</option>
-                  )}
-                  {devices.map(d => (
-                    <option key={d.serial} value={d.serial}>
-                      {d.model} ({d.serial})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
+          ) : (
+            <div className="field">
+              <div className="rail-label">Device</div>
+              <select
+                className="select"
+                value={selectedDevice}
+                onChange={e => setSelectedDevice(e.target.value)}
+                onClick={() => { if (devices.length === 0) loadDevices(); }}
+              >
+                {devices.length === 0 && <option value="">Click to scan for devices…</option>}
+                {devices.map(d => (
+                  <option key={d.serial} value={d.serial}>{d.model} ({d.serial})</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div>
-            <div className="sidebar-section-label">Scan Mode</div>
-            <div className="mode-grid">
+            <div className="rail-label">Scan depth</div>
+            <div className="mode-list">
               {([
-                { key: "quick", label: "Quick Scan", desc: "Parse filesystem metadata" },
-                { key: "deep",  label: "Deep Scan",  desc: "Raw signature carving" },
-                { key: "both",  label: "Both",       desc: "Thorough — recommended" },
+                { key: "quick", label: "Quick", desc: "Reads filesystem records. Seconds to minutes." },
+                { key: "deep",  label: "Deep",  desc: "Scans every sector for file signatures. Slower, finds more." },
+                { key: "both",  label: "Both",  desc: "Quick first, then deep. Recommended." },
               ] as const).map(m => (
                 <button
                   key={m.key}
-                  className={`mode-btn ${scanMode === m.key ? "active" : ""}`}
+                  className={`mode-row ${scanMode === m.key ? "active" : ""}`}
                   onClick={() => setScanMode(m.key)}
                 >
-                  <span className="mode-btn-dot" />
+                  <span className="mode-radio" />
                   <span>
-                    <div>{m.label}</div>
+                    <div className="mode-title">{m.label}</div>
                     <div className="mode-desc">{m.desc}</div>
                   </span>
                 </button>
@@ -302,182 +350,120 @@ export default function App() {
             </div>
           </div>
 
-          <div>
-            <div className="sidebar-section-label">Output Directory</div>
-            <div className="field">
-              <input
-                className="input"
-                placeholder="./recovered"
-                value={outputDir}
-                onChange={e => setOutputDir(e.target.value)}
-              />
-            </div>
+          <div className="field">
+            <div className="rail-label">Save recovered files to</div>
+            <input
+              className="input"
+              placeholder="./recovered"
+              value={outputDir}
+              onChange={e => setOutputDir(e.target.value)}
+            />
           </div>
 
-          <div style={{ flex: 1 }} />
+          <div className="rail-spacer" />
 
-          <button
-            className={`scan-btn ${scanState === "scanning" ? "scanning" : ""}`}
-            onClick={startScan}
-          >
-            {scanState === "scanning" ? (
-              <><span>⏹</span> Stop Scan</>
-            ) : (
-              <><span>▶</span> Start Scan</>
-            )}
+          <button className={`start-btn ${scanState === "scanning" ? "scanning" : ""}`} onClick={startScan}>
+            {scanState === "scanning" ? "■ Stop scan" : "▶ Start scan"}
           </button>
         </aside>
 
-        <div className="content">
+        <section className="main">
           {progress && (
-            <div className="progress-bar-container fade-in">
-              <div className="progress-header">
-                <span className="progress-phase">{progress.phase}</span>
-                <div className="progress-stats">
-                  <span className="progress-stat">
-                    Found: <span className="progress-stat-value">{progress.files_found}</span>
-                  </span>
-                  <span className="progress-stat">
-                    Progress: <span className="progress-stat-value">{pct}%</span>
-                  </span>
+            <div className="scan-status fade-in">
+              <div className="scan-status-row">
+                <div className="scan-phase">{progress.phase}</div>
+                <div className="scan-stats">
+                  <span>Found <b>{progress.files_found}</b></span>
+                  <span>Progress <b>{pct}%</b></span>
                 </div>
               </div>
-              <div className="progress-track">
-                <div
-                  className={`progress-fill ${scanState === "scanning" ? "active" : ""}`}
-                  style={{ width: `${pct}%` }}
-                />
+              <div className="depth">
+                <div className="depth-fill" style={{ width: `${pct}%` }} />
+                <div className="depth-ticks" />
+              </div>
+              <div className="depth-caption">
+                <span>0 B</span>
+                <span>{formatSize(progress.bytes_scanned)} / {formatSize(progress.bytes_total)} scanned</span>
               </div>
               {progress.warning && (
-                <div style={{ marginTop: 6, fontSize: 11, color: "var(--color-warning)" }}>
-                  ⚠ {progress.warning}
-                </div>
+                <div style={{ marginTop: 6, fontSize: 11, color: "var(--color-warning)" }}>⚠ {progress.warning}</div>
               )}
             </div>
           )}
 
-          {results.length > 0 && (
-            <div className="toolbar fade-in">
-              <button className="toolbar-btn" onClick={selectAll}>
-                {selected.size === results.length ? "☐ Deselect All" : "☑ Select All"}
-              </button>
-              <button
-                className="toolbar-btn primary"
-                disabled={selected.size === 0}
-                onClick={recoverSelected}
-              >
-                ↓ Recover Selected ({selected.size})
-              </button>
-              <span className="toolbar-count">
-                {results.length} file{results.length !== 1 ? "s" : ""} found
-              </span>
+          {results.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-state-glyph">{scanState === "scanning" ? "…" : "⌕"}</div>
+              <div className="empty-state-title">
+                {scanState === "scanning" ? "Scanning…" : scanState === "error" ? "Scan failed" : "No results yet"}
+              </div>
+              <div className="empty-state-desc">
+                {scanState === "idle" ? (
+                  "Choose a target and scan depth, then start a scan. Recoverable files will be grouped by how likely they are to be intact."
+                ) : scanState === "scanning" ? (
+                  "Searching for recoverable files. This can take a while for a deep scan of a large drive."
+                ) : error ? (
+                  error
+                ) : (
+                  "No recoverable files were found on the selected target."
+                )}
+              </div>
             </div>
+          ) : (
+            <>
+              <div className="triage">
+                {highConfidenceResults.length > 0 && (
+                  <div className="results-list">
+                    <div className="group-head">
+                      <span className="group-chip high">High confidence</span>
+                      <span className="group-count">{highConfidenceResults.length} file{highConfidenceResults.length !== 1 ? "s" : ""} — recommended, data intact</span>
+                      <div className="group-line" />
+                    </div>
+                    <div className="list-header" role="row">
+                      <span></span><span>File</span><span>Size</span><span>Type</span><span>Method</span><span>Confidence</span>
+                    </div>
+                    {highConfidenceResults.map(renderRow)}
+                  </div>
+                )}
+
+                {reviewResults.length > 0 && (
+                  <div className="results-list">
+                    <div className="group-head">
+                      <span className="group-chip review">Needs review</span>
+                      <span className="group-count">{reviewResults.length} file{reviewResults.length !== 1 ? "s" : ""} — partial data, verify before relying on these</span>
+                      <div className="group-line" />
+                    </div>
+                    <div className="list-header" role="row">
+                      <span></span><span>File</span><span>Size</span><span>Type</span><span>Method</span><span>Confidence</span>
+                    </div>
+                    {reviewResults.map(renderRow)}
+                  </div>
+                )}
+              </div>
+
+              <div className="bulk-bar fade-in">
+                <span className="bulk-count"><b>{selected.size}</b> selected{selected.size > 0 ? ` · ${formatSize(selectedSize)}` : ""}</span>
+                <div className="bulk-spacer" />
+                {highConfidenceResults.length > 0 && (
+                  <button className="ghost-btn" onClick={selectHighConfidence}>
+                    {allHighSelected ? "Deselect high confidence" : "Select all high confidence"}
+                  </button>
+                )}
+                <button className="primary-btn" disabled={selected.size === 0} onClick={recoverSelected}>
+                  ↓ Recover selected
+                </button>
+              </div>
+            </>
           )}
 
-          <div className="results-area">
-            {results.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-state-icon">
-                  {scanState === "scanning" ? "🔍" : "📂"}
-                </div>
-                <div className="empty-state-title">
-                  {scanState === "scanning" ? "Scanning..." :
-                   scanState === "error" ? "Scan Failed" :
-                   "No results yet"}
-                </div>
-                <div className="empty-state-desc">
-                  {scanState === "idle" ? (
-                    "Configure your target and scan mode on the left, then click Start Scan."
-                  ) : scanState === "scanning" ? (
-                    "Searching for recoverable files. This may take a while for deep scans."
-                  ) : error ? (
-                    error
-                  ) : (
-                    "No recoverable files were found on the selected target."
-                  )}
-                </div>
-              </div>
-            ) : (
-              <table className="results-table">
-                <thead>
-                  <tr>
-                    <th style={{width: 32}}></th>
-                    <th>#</th>
-                    <th>Filename</th>
-                    <th>Size</th>
-                    <th>Type</th>
-                    <th>Method</th>
-                    <th>Confidence</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {results.map(file => {
-                    const isSelected = selected.has(file.index);
-                    const conf = getConfClass(file.confidence);
-                    const typeClass = getTypeBadgeClass(file.file_type);
-                    const displayName = file.name ?? `recovered_${String(file.index).padStart(4, "0")}.${file.file_type}`;
-
-                    return (
-                      <tr
-                        key={file.index}
-                        className={`result-row ${isSelected ? "selected" : ""}`}
-                        onClick={() => toggleSelect(file.index)}
-                      >
-                        <td>
-                          <div className={`checkbox ${isSelected ? "checked" : ""}`}>
-                            {isSelected && <span className="checkbox-check">✓</span>}
-                          </div>
-                        </td>
-                        <td style={{ color: "var(--color-text-muted)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
-                          {file.index}
-                        </td>
-                        <td style={{ color: "var(--color-text-primary)", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {displayName}
-                        </td>
-                        <td style={{ color: "var(--color-text-secondary)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
-                          {formatSize(file.size)}
-                        </td>
-                        <td>
-                          <span className={`type-badge ${typeClass}`}>
-                            {file.file_type.toUpperCase()}
-                          </span>
-                        </td>
-                        <td style={{ color: "var(--color-text-muted)", fontSize: 11 }}>
-                          {getMethodLabel(file.recovery_method)}
-                        </td>
-                        <td>
-                          <div className="confidence">
-                            <div className="confidence-bar">
-                              <div
-                                className={`confidence-fill ${conf}`}
-                                style={{ width: `${Math.round(file.confidence * 100)}%` }}
-                              />
-                            </div>
-                            <span className={`confidence-text ${conf}`}>
-                              {Math.round(file.confidence * 100)}%
-                            </span>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
-
           <div className="statusbar">
-            <div className={`statusbar-dot ${
-              scanState === "scanning" ? "scanning" :
-              scanState === "error" ? "error" :
-              "ready"
-            }`} />
-            <span>{statusMsg}</span>
+            <div className={`statusbar-dot ${scanState === "scanning" ? "scanning" : scanState === "error" ? "error" : "ready"}`} />
+            <span className="statusbar-msg">{statusMsg}</span>
             {error && <span style={{ color: "var(--color-danger)" }}>⚠ {error}</span>}
             <span className="statusbar-spacer" />
-            <span>Recovar v0.1.0</span>
+            <span className="statusbar-version">Recovar v0.1.0</span>
           </div>
-        </div>
+        </section>
       </div>
     </div>
   );

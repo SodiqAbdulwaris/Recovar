@@ -65,7 +65,7 @@ struct ListArgs {
     target: String,
 }
 
-#[derive(ValueEnum, Clone, Debug)]
+#[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
 enum TargetArg { Laptop, Android }
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -126,9 +126,8 @@ async fn run_scan(args: ScanArgs) -> Result<()> {
     );
     println!("{}  Output: {}", "→".cyan(), args.output.display().to_string().yellow());
     println!();
-    #[cfg(windows)]
-    if !is_admin() {
-        eprintln!("{} Run as Administrator for full disk access.", "⚠ WARNING:".yellow().bold());
+    if args.target == TargetArg::Laptop && !has_disk_privileges() {
+        eprintln!("{} {} for full disk access.", "⚠ WARNING:".yellow().bold(), elevation_hint());
         eprintln!();
     }
     
@@ -252,9 +251,11 @@ fn run_info() -> Result<()> {
     println!("  Recovar v{}", env!("CARGO_PKG_VERSION").bold());
     println!("  Platform: {} {}", std::env::consts::OS, std::env::consts::ARCH);
     println!();
-    #[cfg(windows)]
-    println!("  Admin:  {}",
-        if is_admin() { "Yes".green().to_string() } else { "No — run as Administrator for disk access".red().to_string() });
+    println!("  {}", if has_disk_privileges() {
+        format!("Elevated: {}", "Yes".green())
+    } else {
+        format!("Elevated: {} — {}", "No".red(), elevation_hint())
+    });
     println!("  ADB:    {}",
         if adb::check_adb_available() { "Available".green().to_string() } else { "Not found — install Android Platform Tools".red().to_string() });
     let drives = disk::list_drives().unwrap_or_default();
@@ -299,7 +300,18 @@ fn format_size(bytes: u64) -> String {
 }
 
 #[cfg(windows)]
-fn is_admin() -> bool {
+fn has_disk_privileges() -> bool {
     use windows_sys::Win32::UI::Shell::IsUserAnAdmin;
     unsafe { IsUserAnAdmin() != 0 }
 }
+
+#[cfg(unix)]
+fn has_disk_privileges() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}
+
+#[cfg(windows)]
+fn elevation_hint() -> &'static str { "Run as Administrator" }
+
+#[cfg(unix)]
+fn elevation_hint() -> &'static str { "Run with sudo" }

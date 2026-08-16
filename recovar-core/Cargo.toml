@@ -21,3 +21,6 @@ windows-sys = { version = "0.52", features = [
     "Win32_System_IO",
     "Win32_System_Ioctl",
 ] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

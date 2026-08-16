@@ -2,6 +2,8 @@ target/
 Cargo.lock
 
 node_modules
+dist/
+recovar-gui/src-tauri/gen/schemas/
 
 *.exe
 *.pdb
